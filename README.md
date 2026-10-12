@@ -8,6 +8,17 @@
 
 ---
 
+## 界面预览
+
+网页界面在原生 CloudCLI 基础上做了汉化与品牌替换：标题「小张claude」＋官方 Claude 星芒图标、
+侧栏「项目」区重排（项目行／对话行／＋ 新建）、顶部统一 ＋ 菜单、AI 自动命名会话等。
+
+![网页界面](docs/screenshots/webui.png)
+
+> 截图为**全新空库**状态（无任何对话记录），仅用于展示界面与品牌定制效果。
+
+---
+
 ## 仓库包含什么
 
 仓库只保留**定制层源码**（约 4 MB），体积巨大的便携运行时与用户数据不入库：
@@ -19,12 +30,13 @@
 | `config/keys.env.example` | ✅ | 密钥模板。真实 `keys.env` 含 API Key，已 `.gitignore` |
 | `patches/` | ✅ | 前端注入器 `*.js`、服务端补丁、`patches.json` 总账 |
 | `tools/` | ✅ | 模型网关 `anthropic-gw.mjs`、自检、构建与修复脚本 |
+| `docs/screenshots/` | ✅ | 界面预览截图（README 顶部引用） |
 | `workspace/` | ✅ | Claude 的默认工作目录 |
 | `app/webui/` | ✅（仅占位） | 网页壳运行目录，用 `.gitkeep` 保留空目录 |
 | `runtime/` | ❌ | 约 1.6 GB：便携 Node.js + CloudCLI + 便携 Git |
 | `data/` | ❌ | 运行时产生的用户数据（浏览器 profile、会话、记忆、日志） |
 
-### 克隆后必做两步
+### 克隆后要做的事（前两项必做，第 3 项可选）
 
 1. **填写密钥**（否则 `START.bat` 会报 `Missing config\keys.env` 并退出）：
 
@@ -47,7 +59,7 @@
 
 ## 快速开始
 
-1. 双击 `START.bat`（或 `启动.bat`）
+1. 双击 `START.bat`
 2. 选择 `[1] 网页界面` → 浏览器自动打开聊天界面
 3. 用完回到启动器选择 `[0] 退出`，再安全弹出 U 盘
 
@@ -65,8 +77,7 @@
 
 ```
 usb-agent\
-├─ START.bat            主入口（双击这个）
-├─ 启动.bat             别名，作用相同
+├─ START.bat            主入口（双击这个，唯一启动脚本）
 ├─ config\
 │   ├─ keys.env.example 密钥与模型设置模板（入库，值为空）
 │   └─ keys.env         填入真实密钥后由启动器读取（不入库，已 gitignore）
@@ -80,8 +91,10 @@ usb-agent\
 │   └─ webui\           网页壳运行目录
 ├─ tools\
 │   ├─ selfcheck.bat    环境自检
+│   ├─ stop-gw.bat      停止本启动器拉起的后台网关
 │   ├─ anthropic-gw.mjs 本地模型网关（MiMo/DeepSeek 自动路由，默认从 4567 起选空闲端口）
 │   └─ build-frontend.py 前端界面补丁构建器
+│   （同目录下另有若干 .bat / .mjs 辅助脚本，均为可选工具）
 └─ workspace\           Claude 的默认工作目录
 ```
 
