@@ -88,9 +88,50 @@
         return (d.getMonth() + 1) + "月" + d.getDate() + "日";
       } catch (e) { return ""; }
     }
+    /* ---- 删除后的本地状态清理（v51 修「删掉又补回来 / 条数不对 / 删除报 404」）----
+       背景：sessionCache 是「已加载过的会话」的内存副本，refreshData() 会用
+       mergeCachedPages() 把它并回服务端结果（否则「加载更多」的页会被刷掉）。
+       但单条删除过去只改 it.p.sessions 和 DOM，没动 sessionCache，于是下一次刷新
+       又把这条已删的会话并回列表（"补上了一条"），而徽标用的是服务端 sessionMeta.total，
+       行数比徽标多（"条数不对"）。点这种幽灵行的 ✕ 再删 → 服务端早已没有该行 → HTTP 404。
+       下面用「墓碑 + 同步扣减计数」两件事把它根治。 ---- */
+    var deletedSids = {};                                  /* 本次页面会话内已删除的 sid */
+    function markDeleted(sid) { if (sid) deletedSids[sid] = 1; }
+    function isDeleted(sid) { return !!sid && deletedSids[sid] === 1; }
+    function pidOf(p) { return (p && (p.projectId || p.id || p.path || p.displayName)) || ""; }
+    /* 把一条会话从「缓存页 + 已加载偏移 + 徽标」里一起摘掉，三处始终同源 */
+    function purgeSession(it, sid) {
+      if (!sid) return;
+      markDeleted(sid);
+      try {
+        var pid = pidOf(it && it.p);
+        if (pid && Array.isArray(sessionCache[pid])) {
+          sessionCache[pid] = sessionCache[pid].filter(function (s) { return (s.id || s.sessionId) !== sid; });
+        }
+        if (pid && Number(loadedOffsets[pid]) > 0) {
+          loadedOffsets[pid] = Math.max(0, Number(loadedOffsets[pid]) - 1);
+          if (!loadedOffsets[pid]) delete loadedOffsets[pid];
+          saveLoadedOffsets();
+        }
+      } catch (e) {}
+      try {
+        var p = it && it.p, meta = p && (p.sessionMeta = p.sessionMeta || {});
+        if (meta && typeof meta.total === "number") meta.total = Math.max(0, meta.total - 1);
+      } catch (e2) {}
+    }
     function delSession(sid, silent, onDone) {
       return fetch("/api/providers/sessions/" + encodeURIComponent(sid) + "?force=true", { method: "DELETE", headers: { Authorization: "Bearer " + token() } })
-        .then(function (r) { if (!r.ok && !silent) wbModal({ title: "删除失败", message: "HTTP " + r.status, confirmText: "知道了" }); if (r.ok && onDone) { try { onDone(); } catch (e3) {} } return r.ok; })
+        .then(function (r) {
+          /* 404 = 服务端本来就没有这一行（磁盘被清 / 同步时被判为孤儿行已删）。
+             这条列表项只是前端缓存里的幽灵，本地摘掉即自愈，不再弹「删除失败」。 */
+          if (r.ok || r.status === 404) {
+            if (onDone) { try { onDone(); } catch (e3) {} }
+            if (!r.ok && !silent) wbModal({ title: "已从列表移除", message: "这条对话在服务端已不存在，已顺手清掉列表里的残留。", confirmText: "知道了" });
+            return true;
+          }
+          if (!silent) wbModal({ title: "删除失败", message: "HTTP " + r.status, confirmText: "知道了" });
+          return false;
+        })
         .catch(function () { if (!silent) wbModal({ title: "删除失败", message: "网络错误，请重试。", confirmText: "知道了" }); return false; });
     }
     function refreshCount(it) {
@@ -101,13 +142,15 @@
     }
     function removeSessionRow(it, sid) {
       try {
+        purgeSession(it, sid);                             /* 先清缓存/偏移/计数，再动 DOM */
         it.p.sessions = (it.p.sessions || []).filter(function (x) { return (x.id || x.sessionId) !== sid; });
-        var row = it.sub.querySelector('a[data-sid="' + sid + '"]');
+        var row = it.sub.querySelector('a[data-sid="' + cssEscape(sid) + '"]');
         if (row && row.parentNode) row.parentNode.removeChild(row);
         if (!it.sub.querySelector("a[data-sid]")) { it.sub.innerHTML = ""; }
         refreshCount(it);
       } catch (e) {}
     }
+    function cssEscape(v) { try { return (window.CSS && CSS.escape) ? CSS.escape(String(v)) : String(v).replace(/"/g, '\\"'); } catch (e) { return String(v); } }
     function delOne(it, a, sid) {
       if (!sid) return;
       wbModal({
@@ -152,6 +195,7 @@
             .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
             .then(function () {
               try {
+                (p.sessions || []).forEach(function (s) { markDeleted(s.id || s.sessionId); }); /* 墓碑：防止被缓存并回 */
                 p.sessions = [];
                 p.sessionMeta = Object.assign({}, p.sessionMeta || {}, { total: 0, hasMore: false });
                 if (loadedOffsets[pid] != null) { delete loadedOffsets[pid]; saveLoadedOffsets(); }
@@ -272,8 +316,10 @@
         tsm.style.cssText = "flex:0 0 auto;font-size:10px;color:hsl(var(--muted-foreground,215 16% 47%));opacity:.75;";
         a.appendChild(tsm);
         var renameX = document.createElement("span"); renameX.textContent = "\u2026"; renameX.title = "重命名这条对话";
+        renameX.setAttribute("data-wb-action", "1");   /* 01-shared 的"首点必达"据此跳过操作按钮 */
         renameX.style.cssText = "position:absolute;right:27px;top:50%;transform:translateY(-50%);font-size:15px;color:hsl(var(--muted-foreground,215 16% 47%));cursor:pointer;opacity:0;transition:opacity .12s;padding:1px 4px;line-height:1;border-radius:5px;background:hsl(var(--background,0 0% 100%));";
         var delX = document.createElement("span"); delX.textContent = "\u2715"; delX.title = "删除这条对话";
+        delX.setAttribute("data-wb-action", "1");
         delX.style.cssText = "position:absolute;right:6px;top:50%;transform:translateY(-50%);font-size:11px;color:#dc2626;cursor:pointer;opacity:0;transition:opacity .12s;padding:2px 5px;line-height:1;border-radius:5px;background:hsl(var(--background,0 0% 100%));";
         if (window.WB.isTouch) { delX.style.opacity = ".55"; }
         if (window.WB.isTouch) { renameX.style.opacity = ".75"; }
@@ -589,21 +635,13 @@
         });
       } catch (e) {}
     }
-    /* 打开会话：优先软跳转（不整页重载 → 不闪、左侧展开与高亮都不丢）；
-       若 800ms 后视图没换（软跳转没生效），回退整页跳转兜底。 */
+    /* 打开会话：统一走共享层的强兜底入口（01-shared，软跳转 + 视图没换就整页跳转）。
+       以前这里自己实现了一份「800ms 比 header 文本」的兜底，两份逻辑容易跑偏，故合并。 */
     function openSession(sid) {
-      var href = "/session/" + encodeURIComponent(sid);
-      if (location.pathname === href) { return; }
-      var before = "";
-      try { var h = document.querySelector("header"); before = h ? h.textContent : ""; } catch (e) {}
-      try { window.WB.spaNav(href); } catch (e) { location.assign(href); return; }
-      setTimeout(function () {
-        try {
-          if (location.pathname !== href) { location.assign(href); return; }
-          var h2 = document.querySelector("header");
-          if ((h2 ? h2.textContent : "") === before) { location.assign(href); }
-        } catch (e) {}
-      }, 800);
+      try {
+        if (window.WB && window.WB.openSessionSafe) { window.WB.openSessionSafe(sid); return; }
+      } catch (e) {}
+      location.assign("/session/" + encodeURIComponent(sid));
     }
     function sigOf(list) {
       try {
@@ -628,7 +666,7 @@
           return fetch("/api/projects/" + encodeURIComponent(pid) + "/sessions?limit=20&offset=" + offset, { headers: { Authorization: "Bearer " + token() } }).then(function (r) { return r.ok ? r.json() : null; }).then(function (data) {
             var page = data && data.data && data.data.sessions ? data.data : data, incoming = Array.isArray(page && page.sessions) ? page.sessions : [], seen = {};
             (p.sessions || []).forEach(function (s) { seen[s.id || s.sessionId] = 1; });
-            incoming.forEach(function (s) { var sid = s.id || s.sessionId; if (sid && !seen[sid]) { p.sessions.push(s); seen[sid] = 1; } });
+            incoming.forEach(function (s) { var sid = s.id || s.sessionId; if (sid && !seen[sid] && !isDeleted(sid)) { p.sessions.push(s); seen[sid] = 1; } });
             p.sessionMeta = Object.assign({}, p.sessionMeta || {}, page && page.sessionMeta || {}); offset = p.sessions.length;
             if (!incoming.length) p.sessionMeta.hasMore = false;
             return next();
@@ -642,12 +680,30 @@
       (list || []).forEach(function (p) {
         var pid = p && (p.projectId || p.id || p.path);
         var cached = pid && sessionCache[pid];
+        /* 服务端结果里也要剔掉本地墓碑（删除刚成功、刷新数据在飞时可能出现） */
+        if (Array.isArray(p.sessions) && p.sessions.length) {
+          p.sessions = p.sessions.filter(function (s) { return !isDeleted(s.id || s.sessionId); });
+        }
         if (!pid || !Array.isArray(cached) || cached.length <= (p.sessions || []).length) return;
         var seen = {}, merged = [];
         (p.sessions || []).forEach(function (s) { var sid = s.id || s.sessionId; if (sid && !seen[sid]) { seen[sid] = 1; merged.push(s); } });
-        cached.forEach(function (s) { var sid = s.id || s.sessionId; if (sid && !seen[sid]) { seen[sid] = 1; merged.push(s); } });
+        cached.forEach(function (s) { var sid = s.id || s.sessionId; if (sid && !seen[sid] && !isDeleted(sid)) { seen[sid] = 1; merged.push(s); } });
         p.sessions = merged;
         p.sessionMeta = Object.assign({}, p.sessionMeta || {}, { hasMore: !!(p.sessionMeta && p.sessionMeta.hasMore) });
+      });
+      return list;
+    }
+    /* 行数与徽标对齐：第一页已经是完整一页（hasMore=false）却比 total 多出来，
+       只能是缓存里并回来的幽灵行（服务端早已没有）。按服务端裁掉，保证「条数」永远对得上。 */
+    function reconcileCounts(list) {
+      (list || []).forEach(function (p) {
+        try {
+          var meta = p.sessionMeta || {}, rows = p.sessions || [];
+          if (meta.hasMore) return;
+          if (typeof meta.total !== "number") return;
+          if (rows.length <= meta.total) return;
+          p.sessions = rows.slice(0, meta.total);
+        } catch (e) {}
       });
       return list;
     }
@@ -670,7 +726,7 @@
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (data) {
             var list = Array.isArray(data) ? data : (data.projects || (data.data && data.data.projects) || []);
-            return restoreLoadedPages(list).then(function (restored) { return mergeCachedPages(restored); });
+            return restoreLoadedPages(list).then(function (restored) { return mergeCachedPages(restored); }).then(reconcileCounts);
           })
           .then(function (list) {
             var old = document.querySelector("." + BLOCK);

@@ -34,6 +34,7 @@
 | `workspace/` | ✅ | Claude 的默认工作目录 |
 | `app/webui/` | ✅（仅占位） | 网页壳运行目录，用 `.gitkeep` 保留空目录 |
 | `runtime/` | ❌ | 约 1.6 GB：便携 Node.js + CloudCLI + 便携 Git |
+| `runtime.zip` `runtime.sha256` | ❌ | 瘦身布局产物（U 盘专用，由 `tools\deploy-to-usb.bat` 生成） |
 | `data/` | ❌ | 运行时产生的用户数据（浏览器 profile、会话、记忆、日志） |
 
 ### 克隆后要做的事（前两项必做，第 3 项可选）
@@ -72,19 +73,59 @@
 | [1] 网页界面 | 浏览器图形界面；模型在页面右下角下拉随意切换 MiMo / DeepSeek，无需重开 |
 | [2] 终端版 | 命令行界面（Claude Code 原生 TUI），默认 DeepSeek Flash |
 | [3] 环境自检 | 一键检查运行时/密钥是否正常 |
+| [4] 释放 U 盘 | 结束本包拉起的全部进程（网关／网页壳／Claude Code／本会话浏览器），随后即可安全弹出 |
+| [0] 退出 | 只停网关并退出菜单（浏览器窗口需自己关） |
+
+## 用完怎么安全弹出（U 盘“正在使用中”怎么办）
+
+这个包运行时会有几个进程“脚踩在 U 盘上”，任何一个还活着，Windows 就会拒绝弹出：
+
+| 占用者 | 由谁拉起 |
+|---|---|
+| 本地模型网关 | `START.bat`（后台静默运行，不弹窗） |
+| 网页壳（Node 服务） | `START.bat` |
+| Claude Code | 终端模式 / 网页里发消息时 |
+| 本会话浏览器 | `tools\open-browser.mjs` 启动的 Edge/Chrome。它的配置目录**默认在本机**（`%LOCALAPPDATA%\usb-agent-browser-profile`），U 盘上不放浏览器数据；但 Edge 的 crashpad、后台常驻进程（`--no-startup-window`）关窗口也不退，仍可能占盘，所以 `[0]`/`[4]` 会连它们一起关 |
+
+**默认行为已经处理好了**：网关和浏览器都由一个「常驻监督者」拉起，而这个监督者与启动器
+**共享同一个控制台**（只共享控制台、不弹窗、不写输出），所以你**直接点右上角 × 关掉黑窗**时，
+系统会连带把监督者、网关、浏览器一起终止，U 盘就能弹了。
+（早期版本把网关做成脱离控制台的游离进程、浏览器用 `start` 拉起，才会出现「关窗也没用」。）
+常规退出走 `[0] 退出`，会显式结束网关、监督者和本会话浏览器（`stop-all`）。
+
+若还是弹不出来，双击 `tools\eject-usb.bat`（或菜单 `[4]`）——它做**两轮扫描**并结束命中的进程：
+
+1. 命令行 / 可执行文件里出现本包目录的进程；
+2. **加载了本包文件（DLL/EXE）的进程**——这类占用者的命令行里根本看不到路径，却是
+   “明明没开什么东西、盘就是弹不出来”的常见元凶（实测抓过一只把组件 DLL 装在 U 盘上的 Edge 子进程）。
+
+```cmd
+tools\eject-usb.bat --check                          :: 只看谁在占用，不动手
+tools\eject-usb.bat --check --root "E:\usb-agent"     :: 换过盘符/盘里另有一份时指定那个目录
+tools\eject-usb.bat --fast                            :: 跳过第二轮深度扫描，快一点
+```
+
+如果连它也扫不到、Windows 还是不让弹，按脚本最后打印的清单一条条试：
+**关掉打开着 U 盘目录的资源管理器窗口 → 关掉黑窗 → 等 10 秒（写缓存回刷）→ 重启。**
+
+> 注意：浏览器是我们用 `data\browser-profile` 单独启动的，和宿主机的浏览器是两个进程，
+> 关掉宿主机自己的浏览器没用，要让本脚本或 `[4]` 把它关掉。
+
 
 ## 目录结构
 
 ```
 usb-agent\
 ├─ START.bat            主入口（双击这个，唯一启动脚本）
+├─ runtime.zip          瘦身布局：runtime 只以这一个文件放 U 盘（首次启动展开到本机）
+├─ runtime.sha256       上面 zip 的内容指纹，决定本机缓存目录名（换机也能命中）
 ├─ config\
 │   ├─ keys.env.example 密钥与模型设置模板（入库，值为空）
 │   └─ keys.env         填入真实密钥后由启动器读取（不入库，已 gitignore）
 ├─ patches/            前端注入器源码 + 定制点总账（改界面改这里，勿改 bundle）
-├─ runtime\
-│   ├─ node\            便携 Node.js（含全局安装的 Claude Code 与网页壳）
-│   └─ git\             便携 Git（Claude Code 依赖的 Git Bash）
+├─ runtime\             就地布局：便携 Node.js + 便携 Git（与 runtime.zip 二选一）
+│   ├─ node\            （含全局安装的 Claude Code 与网页壳）
+│   └─ git\             （Claude Code 依赖的 Git Bash）
 ├─ data\                所有数据，随身携带
 │   └─ home\            重定向后的用户目录（.claude 配置、会话、缓存）
 ├─ app\
@@ -92,11 +133,26 @@ usb-agent\
 ├─ tools\
 │   ├─ selfcheck.bat    环境自检
 │   ├─ stop-gw.bat      停止本启动器拉起的后台网关
+│   ├─ eject-usb.bat    释放 U 盘：结束网关/网页壳/Claude Code/本会话浏览器（--check 只查看）
+│   ├─ runtime-home.bat 解析运行时可用的 runtime 目录；瘦身布局时首次展开到本机（START.bat 会调）
+│   ├─ deploy-to-usb.bat 一条命令部署到 U 盘（runtime 只留一个 zip + 多线程同步）
+│   ├─ zip-util.mjs     自写的 zip 打包器（系统 tar 打这个包会静默丢文件，见 patches/README.md）
+│   ├─ sync-to-usb.bat  快速同步：只更新程序文件与 data，不动 runtime
+│   ├─ forget-runtime-cache.bat 清除本机上的 runtime 展开缓存
+│   ├─ open-browser.mjs 等网页起来后用 U 盘独立 profile 打开界面（--dry-run 只探测）
+│   ├─ pack-for-usb.bat 整包打成单个 zip（备选搬运方式）
+│   ├─ unpack-on-usb.bat 在 U 盘上解开整包 zip
 │   ├─ anthropic-gw.mjs 本地模型网关（MiMo/DeepSeek 自动路由，默认从 4567 起选空闲端口）
-│   └─ build-frontend.py 前端界面补丁构建器
+│   ├─ portable-runtime.mjs 端口探测 / 网关启停
+│   ├─ release-usb.mjs  释放 U 盘的实现（命令行 + 已加载模块两轮匹配）
+│   └─ build-frontend.py 前端界面补丁构建器（仅在开发副本上跑）
 │   （同目录下另有若干 .bat / .mjs 辅助脚本，均为可选工具）
 └─ workspace\           Claude 的默认工作目录
 ```
+
+> U 盘上用的是**瘦身布局**（只有 `runtime.zip`），开发副本上是**就地布局**（有 `runtime\`）。
+> `runtime-home.bat` 两种都认；改前端/打补丁请在开发副本做，U 盘那份是部署产物。
+
 
 ## 换模型 / 换密钥
 
@@ -119,9 +175,61 @@ DEEPSEEK_MODEL=deepseek-flash  # V4.1 Flash（最新）；也可改 deepseek-v4-
 
 ## 拷到 U 盘
 
-1. 把整个 `usb-agent` 文件夹拷到 U 盘（建议放根目录，文件夹名保持英文）；
-2. U 盘建议格式化为 **NTFS**（exFAT 上 Node 运行会明显变慢，FAT32 不支持大文件）；
-3. 注意：格式化会清空 U 盘，先备份。
+### 第一步：U 盘必须是 NTFS（这条最重要）
+
+用资源管理器看一眼 U 盘的「文件系统」：**如果是 FAT32，拷贝慢的锅基本就全在这儿。**
+
+FAT32 最怕"又多又碎"的文件——它按链式簇表管理，每个小文件都要改目录项和 FAT 表，
+簇还大（32 GB 盘通常 32 KB/簇），1.6 GB 的 `node_modules` 光浪费的簇就有几百 MB。
+实测本包有 **47850 个文件**，对 FAT32 来说是最坏的工作负载。
+
+两种改法（都保留数据）：
+
+```cmd
+:: 方法 A：原地转换，一键完成、数据都在（需要管理员权限的 CMD）
+convert E: /FS:NTFS
+```
+
+方法 B：把包先拷到电脑 → 资源管理器右键 U 盘 → 「格式化」→ 文件系统选 **NTFS** → 拷回去。
+（转换/格式化都请先确认重要数据有备份，中途不要拔盘。）
+
+改完 NTFS 之后，同一个 U 盘拷小文件通常会快好几倍。
+
+### 第二步：部署（推荐一条命令）
+
+```cmd
+tools\deploy-to-usb.bat E        :: E 换成你的 U 盘盘符
+```
+
+它做三件事：
+
+1. 把 `runtime\`（4.78 万个文件）打成 **U 盘上的一个 `runtime.zip`** —— 顺序写一个大文件，
+   与文件数无关，FAT32 上也快；
+2. 其余文件（几百个）用 `robocopy /MT:32` 多线程同步；`data\` 只补新增、不覆盖不删除；
+3. 顺手删掉 U 盘上旧的 `runtime\` 目录（否则会继续占空间、还会让程序走回老布局）。
+
+之后在**目标电脑**上首次双击 `START.bat`，程序会把 `runtime.zip` 展开到**本机磁盘**一次
+（约 1~3 分钟，之后永久复用；运行时从本机 SSD 读，网页响应也更快）。U 盘上从此只有
+一个 runtime 文件，装多少次都是"搬一个文件"。
+
+> 代价：目标电脑会留下约 1.6 GB 的运维缓存，路径 `%LOCALAPPDATA%\usb-agent-runtime\<哈希>`。
+> 介意的话运行 `tools\forget-runtime-cache.bat` 清掉（不影响 U 盘数据，下次启动会重展）。
+
+### 平时改了代码，只想快速更新 U 盘
+
+```cmd
+tools\sync-to-usb.bat E          :: 只同步程序文件与 data，不动 runtime，几秒完事
+```
+
+### 其他备选做法
+
+- **整包打成一个 zip**：`tools\pack-for-usb.bat` → 拷那一个文件到 U 盘 → 在 U 盘上
+  `tools\unpack-on-usb.bat` 解开（`--fast` 不压缩最快）。适合"整包一次搬过去"。
+- **想让 U 盘继续用老布局**（runtime 目录直接放盘上）：`tools\deploy-to-usb.bat E --inline`，
+  或者干脆手工拷贝。FAT32 下不建议。
+- **先瘦身再拷**：`runtime\node\node.exe tools\prune-portable-cache.mjs --apply --trim-runtime`
+  清掉可重建的缓存与 source map（不动会话、登录态、workspace）。详见 `CLEANUP-REPORT.md`。
+
 
 ## 注意事项
 
@@ -129,7 +237,8 @@ DEEPSEEK_MODEL=deepseek-flash  # V4.1 Flash（最新）；也可改 deepseek-v4-
 - **不需要管理员权限**，不写注册表，不装驱动。
 - 数据都在 U 盘 `data\` 里；网页优先使用 U 盘 `data\browser-profile` 的独立 Edge/Chrome 配置，避免把登录令牌写入宿主浏览器；找不到 Edge/Chrome 时才回退系统默认浏览器。
 - 杀毒软件 / SmartScreen 首次可能拦截，选择「仍要运行」即可。
-- 拔盘前：先回到启动器选择 `[0] 退出`，确认网页和终端已关闭，再安全弹出；不要在请求进行中强拔。
+- 拔盘前：先回到启动器选择 `[0] 退出`（或 `[4] 释放 U 盘`），确认网页和终端已关闭、浏览器窗口已关，再安全弹出；不要在请求进行中强拔。
+  直接点 × 关掉黑窗也没问题——网关与启动器共享控制台，会随之结束；万一还有残留，`tools\eject-usb.bat` 一键清干净。
 
 ## 网页壳说明（CloudCLI）
 
@@ -179,9 +288,22 @@ DEEPSEEK_MODEL=deepseek-flash  # V4.1 Flash（最新）；也可改 deepseek-v4-
 ## 故障排查
 
 - 双击 `tools\selfcheck.bat` 一键体检（Node / Claude Code / Git / 密钥 / 网关 / 前端补丁，含「改了源码忘构建」检测）。
+- **换了台电脑，第一次启动卡在「正在把 runtime 展开到本机磁盘」**：正常。瘦身布局下 runtime 只以
+  `runtime.zip` 放在 U 盘，首次要在本机磁盘展开一次（约 1~3 分钟），之后每次启动秒开。
+  展开位置 `%LOCALAPPDATA%\usb-agent-runtime\<哈希>`；不想留着就 `tools\forget-runtime-cache.bat`。
+- **启动报「既没有 runtime\ 目录，也没有 runtime.zip」**：U 盘上没部署 runtime。用
+  `tools\deploy-to-usb.bat E` 重新部署，或把 `runtime\` 目录直接放到包里（老布局）。
+- **U 盘拷得特别慢**：先看 U 盘文件系统是不是 FAT32——是的话按上文「拷到 U 盘」第一步转成 NTFS，
+  再用 `tools\deploy-to-usb.bat E` 部署（runtime 只留一个 zip）。
+- **弹出 U 盘提示「该设备正在使用中」**：说明还有本包的进程活着。双击 `tools\eject-usb.bat`（或启动器菜单 `[4]`）一键结束——它会做命令行扫描 + **已加载本包 DLL/EXE 的进程扫描**两轮；想先看是谁在占用就加 `--check`。常见原因见上文「用完怎么安全弹出」。
+- **启动后「Gateway health check timed out」（网关健康检查超时）**：模型用不了就是它。
+  先 `runtime\node\node.exe tools\portable-runtime.mjs stop-all` 再重启；仍不行看
+  `data\home\logs\gw.log`（需 `set GW_LOG=1`）。
+- **刚打开页面，第一次点某条对话右侧聊天区没反应，得再点一次**：旧版有过这个毛病——侧栏列表是 React 渲染的，页面刚起来时列表还在被数据回填（U 盘读得慢，回填更晚），按下和抬起之间那个 `<a>` 节点被整块替换，浏览器就不派发 click 了，第一次点击凭空消失。现已内置「首点必达」：记录按下的会话 id，抬起后若地址没变就补一次导航。仍遇到时 `Ctrl + F5` 强刷一次让新 bundle 生效。
 - **启动后浏览器没自动打开**：服务其实已经在跑了，手动访问启动窗口中显示的实际地址即可；端口被占用时不一定是 `3001`。
 - **升级过 cloudcli（npm）后界面/功能异常**：依次跑 `python tools\apply-server-patches.py`（重放服务端补丁）和 `python tools\build-frontend.py`（重建前端），再 Ctrl+F5。
 - **排查回复速度**：在启动器前临时执行 `set USBAI_PERF=1` 和 `set GW_LOG=1`，再运行 `START.bat`。provider 阶段日志会显示在启动窗口，网关分段日志写入 `data\home\logs\gw.log`；重点看 `sdk.first_assistant_event`（首个模型事件）与网关的 `upstreamHeadersMs` / `firstChunkMs`。诊断完成后关闭这两个环境变量即可。
+- **发消息报错「Claude Code native binary at … exists but failed to launch」**：这句提示**与二进制无关**（它是 Claude Agent SDK 的通用模板，照抄了 Linux 下 libc 不匹配的说法），真实原因几乎总是**该会话所属的项目文件夹不存在**——Claude Code 必须在该目录里启动，`cwd` 不存在时 libuv 起子进程会直接返回 `ENOENT`，SDK 见「文件在、却启动失败」就报了这句话。启动器每次启动都会跑 `tools\repair-portable-state.mjs`：包自身路径（`data\home`、`app\webui`、旧包根下的任何位置）会自动并回「普通对话」；真正被删掉的外部项目则会在启动窗口列出警告，照提示在侧栏项目行 ⋯ 里「移除项目」或重新选文件夹建项目即可。手工体检：`runtime\node\node.exe tools\repair-portable-state.mjs --check`（会列出所有「文件夹不存在」的项目）。
 - 网页打不开：看窗口里提示的端口，再手动访问；重新双击 `START.bat` 时会自动避开占用端口。
 - **界面看着"没变化"（菜单/按钮还是旧的）**：浏览器按 `Ctrl + F5` 强制刷新一次。
 - 终端模式：输入 `/exit` 退出 Claude Code 回到菜单。

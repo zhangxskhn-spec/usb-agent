@@ -3,6 +3,8 @@ setlocal EnableExtensions
 pushd "%~dp0.."
 set "ROOT=%CD%"
 popd
+call "%~dp0runtime-home.bat"
+if not defined USBAI_RUNTIME (echo    [ERROR] No usable runtime. & pause & exit /b 1)
 
 set "HOME=%ROOT%\data\home"
 set "USERPROFILE=%HOME%"
@@ -13,8 +15,8 @@ set "TMP=%TEMP%"
 set "CLAUDE_CONFIG_DIR=%HOME%\.claude"
 set "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
 set "DISABLE_AUTOUPDATER=1"
-set "CLAUDE_CODE_GIT_BASH_PATH=%ROOT%\runtime\git\bin\bash.exe"
-set "PATH=%ROOT%\runtime\node;%ROOT%\runtime\git\cmd;%PATH%"
+set "CLAUDE_CODE_GIT_BASH_PATH=%USBAI_RUNTIME%\git\bin\bash.exe"
+set "PATH=%USBAI_RUNTIME%\node;%USBAI_RUNTIME%\git\cmd;%PATH%"
 
 for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%ROOT%\config\keys.env") do (
   if not "%%~a"=="" set "%%~a=%%~b"

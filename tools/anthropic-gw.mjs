@@ -18,6 +18,14 @@ const PORT = Number(process.env.GW_PORT || 4567);
 // Claude Code / CloudCLI 请求都带它。设置了就强制校验，挡住本机其他程序的蹭用。
 const GW_TOKEN = process.env.ANTHROPIC_AUTH_TOKEN || '';
 
+/* 网关与启动器共享同一个控制台（这样关掉黑窗它就会被系统一起终止，U 盘才能安全弹出）。
+   代价是终端模式下按 Ctrl+C 会连带发信号到这里 —— 注册空监听器即可忽略，
+   真正要停网关时走 tools\eject-usb.bat / START.bat 的退出清理（按 pid 精确结束）。 */
+try {
+  process.on('SIGINT', () => {});
+  process.on('SIGBREAK', () => {});
+} catch (_) { /* 非 Windows 或信号不可用时忽略 */ }
+
 function readEnvFile(file, out) {
   try {
     const txt = fs.readFileSync(file, 'utf8');
