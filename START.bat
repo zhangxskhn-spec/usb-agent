@@ -20,6 +20,9 @@ set "TMP=%TEMP%"
 set "CLAUDE_CONFIG_DIR=%HOME%\.claude"
 set "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
 set "DISABLE_AUTOUPDATER=1"
+rem Claude Code drops ALL colour when TERM=dumb (some shells set it), which turns
+rem the whole TUI grey and makes the logo look like a broken blob. Clear it.
+set "TERM="
 set "NPM_CONFIG_CACHE=%HOME%\.npm-cache"
 rem Browser profile lives on THIS machine, not on the USB: leftover Edge processes
 rem (crashpad etc.) would otherwise keep holding the drive and block ejection.
@@ -191,11 +194,18 @@ if exist "%USBAI_RUNTIME%\node\node.exe" (
 echo.
 echo Stopped the gateway and the browser opened for this pack.
 echo If Windows still refuses to eject the USB drive, run menu [4]
-echo (or tools\eject-usb.bat) to end everything holding the drive.
+echo (or tools\usb-eject.bat) to end everything holding the drive.
 endlocal
 exit /b 0
 
 :release
-call "%ROOT%\tools\eject-usb.bat"
+rem Move this window's own working directory off the USB before handing over.
+rem A cmd window whose CWD sits on the drive keeps the volume locked, so
+rem leaving it there would make the drive impossible to eject (verified with
+rem FSCTL_LOCK_VOLUME). The hand-over itself runs from %TEMP% on the host disk.
+cd /d "%SystemRoot%"
+echo.
+echo Opening the safe-eject helper in a new window...
+call "%ROOT%\tools\usb-eject.bat"
 goto :menu
 

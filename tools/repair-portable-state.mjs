@@ -255,12 +255,164 @@ function listBrokenProjects(db) {
 }
 
 function reportBrokenProjects(broken, label) {
-  if (!broken.length) return;
+  if (!broken.length || quiet) return;
   log(`${label} ${broken.length} 个项目文件夹不存在，该项目里的对话一发送就会失败：`);
   for (const item of broken.slice(0, 10)) {
     console.log(`      - ${item.name}  →  ${item.path}`);
   }
   console.log('        处理办法：侧栏项目行 ⋯ →「移除项目」，或重新为现有文件夹建一个项目。');
+}
+
+/**
+ * 写入 Claude Code 的 settings.json（网关模型别名 + 中文状态行）。
+ *
+ * ① modelPicker：Claude Code 只认识官方模型名，mimo-* / deepseek-* 会让它每次启动
+ *    在欢迎界面之上刷 7 行 unknown-model 警告，模型名也只能显示原始 id。modelPicker
+ *    是官方支持的声明方式：声明后警告消失、/model 下拉显示友好名称与中文说明，
+ *    behavesAs 让它按 Sonnet 的能力与上下文窗口处理（网关就是 Anthropic 兼容端点）。
+ *    具体哪 4 个模型见下面的 MODELS（都逐个实测过上游可用）。
+ *    `replaceBuiltInOptions: true` 是关键：官方说明是「只留 Default 一行 + 这些 options，
+ *    内置的 Claude 阵容、网关发现的模型、ANTHROPIC_CUSTOM_MODEL_OPTION 全部隐藏」。
+ *    不加它的话，/model 里会混进用不了的 Claude 模型（网关根本不提供），以及
+ *    START.bat 为映射 Opus/Sonnet/Haiku 三档而设的 ANTHROPIC_DEFAULT_*_MODEL
+ *    带来的三行重复「Custom ··· model」，看着很乱。
+ * ② statusLine：输入框上方常驻一行中文速查（当前模型 / 换模型 / 换模式 / 退出）+ 一行
+ *    模式中英对照，解决「不知道怎么用」。命令里写的是 node.exe 与脚本的绝对路径——实测
+ *    状态行命令走的是 sh 而不是 cmd，`%VAR%` 不会展开，所以只能用绝对路径；而它是每台
+ *    机器启动时现算的，换盘符/换机器都会自动更新。运行时目录取自 USBAI_RUNTIME
+ *    （瘦身布局下它指向本机展开缓存，不是包内 runtime）。
+ * ③ 权限模式默认 auto：`permissions.defaultMode = "auto"`。默认的 manual 每改一个文件
+ *    都要按确认，用户「感觉卡住了」多半就是这个。
+ *
+ * 幂等：内容一致时一个字节都不写；用户手改坏了则原样保留不动。
+ */
+/* /model 里显示哪几个模型。
+ *
+ * 就是网关真正能路由、且上游认账的那 4 个——2026-10-16 逐个发真实请求实测：
+ *   mimo-v2.6-pro ✅  mimo-v2.6-flash ✅  deepseek-flash ✅  deepseek-v4-pro ✅
+ *   deepseek-v4.1-flash ❌ DeepSeek 端点 400：「The supported API model names are
+ *                        deepseek-flash, deepseek-v4-pro」——它的现役 id 就是 deepseek-flash。
+ * 顺序与网页端下拉一致（claude-models.provider.js 的 CLAUDE_PREDEFINED_MODELS）。
+ */
+const MODELS = [
+  ['mimo-v2.6-pro', 'MiMo V2.6 Pro', '小米 MiMo · 复杂推理，慢一些'],
+  ['mimo-v2.6-flash', 'MiMo V2.6 Flash', '小米 MiMo · 响应最快，日常问答、写文案'],
+  ['deepseek-flash', 'DeepSeek V4.1 Flash', 'DeepSeek · 现役主力，代码、长文'],
+  ['deepseek-v4-pro', 'DeepSeek V4 Pro', 'DeepSeek · 更强推理，稍慢'],
+];
+
+function modelPickerRows() {
+  const rows = MODELS.map(([model, label, description]) => ({
+    model,
+    label,
+    behavesAs: 'claude-sonnet-4-5',
+    description,
+  }));
+  // keys.env 里若配了这 4 个之外的模型（自定义场景），补在最后，别把它藏起来。
+  for (const prefix of ['MIMO', 'DEEPSEEK']) {
+    const id = String(process.env[`${prefix}_MODEL`] || '').replace('[1m]', '').trim();
+    if (!id || rows.some((row) => row.model === id)) continue;
+    rows.push({ model: id, label: id, behavesAs: 'claude-sonnet-4-5' });
+  }
+  return rows;
+}
+
+function statuslineCommand() {
+  const runtime = process.env.USBAI_RUNTIME || path.join(ROOT, 'runtime');
+  const nodeExe = path.join(runtime, 'node', 'node.exe');
+  const script = path.join(ROOT, 'tools', 'cli-statusline.mjs');
+  return `"${nodeExe}" "${script}"`;
+}
+
+function ensureClaudeSettings() {
+  const file = path.join(CLAUDE_HOME, 'settings.json');
+  let data = {};
+  if (exists(file)) {
+    try {
+      data = JSON.parse(fs.readFileSync(file, 'utf8')) || {};
+    } catch {
+      return false; // 用户手改坏了，别覆盖
+    }
+  }
+  const want = {
+    // 只留 Default + 下面这几行，隐藏内置 Claude 阵容与三档 Custom 重复行
+    modelPicker: { replaceBuiltInOptions: true, options: modelPickerRows() },
+    statusLine: { type: 'command', command: statuslineCommand() },
+  };
+  let changed = false;
+  for (const [key, value] of Object.entries(want)) {
+    if (JSON.stringify(data[key]) === JSON.stringify(value)) continue;
+    data[key] = value;
+    changed = true;
+  }
+  // 默认用 acceptEdits（接受编辑）：**不能**用 auto。
+  //   · 默认的 manual 每改一个文件都要按一次确认，用户「感觉卡住了」多半就是这个；
+  //   · auto 理论上最合适，但实测在这套环境下**永远不可用**——官方底部直接提示
+  //     `auto mode unavailable for this model`，即使把模型名换成 claude-sonnet-4-5
+  //     也一样（auto 要靠官方的模型分类器，网关不是真 Anthropic 端点，拿不到这个能力）；
+  //   · 只剩 acceptEdits 是「不再逐条问」里最稳的：改文件直接落盘，跑命令仍会问你。
+  // 官方 settings 键是 permissions.defaultMode；只认用户级设置——我们写的正是
+  // $CLAUDE_CONFIG_DIR/settings.json（二进制原文：repo-level settings cannot grant
+  // `defaultMode: auto`）。留出其它 permissions 子键不动（allow/deny 规则等）。
+  const permissions = { ...(data.permissions || {}) };
+  if (permissions.defaultMode !== 'acceptEdits') {
+    permissions.defaultMode = 'acceptEdits';
+    data.permissions = permissions;
+    changed = true;
+  }
+  if (!changed) return false;
+  fs.mkdirSync(CLAUDE_HOME, { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  return true;
+}
+
+/**
+ * 预置「已信任本工作区」，让 Claude Code 不再弹英文的信任确认。
+ *
+ * 启动时那个 > No, exit / Yes, I trust this folder 的二叉框就是它：Claude Code 要求
+ * 用户确认「这个文件夹是你自己的吗」才允许读写。官方给出的免弹方式（二进制里的原文）
+ * 就是写 `projects[<路径>].hasTrustDialogAccepted: true`。键是正斜杠规范化路径；在 git
+ * 仓库里 Claude Code 认的是仓库根，所以仓库根与 workspace 两个都写。
+ * 只针对本包自己的目录，不碰用户其它项目。
+ * 附带的 hasCompletedOnboarding / hasSeenAutoDefaultNotice 只为「开箱即用」：
+ * 省掉首次的英文引导向导和那一大段 Auto mode 说明。
+ */
+function trustKeys() {
+  return [ROOT, WORKSPACE_ROOT].map((p) => String(p).replace(/\\/g, '/').replace(/\/+$/, ''));
+}
+
+function ensureWorkspaceTrust() {
+  const files = [path.join(CLAUDE_HOME, '.claude.json'), path.join(HOME, '.claude.json')];
+  let changed = false;
+  for (const file of files) {
+    let data = null;
+    if (exists(file)) {
+      try {
+        data = JSON.parse(fs.readFileSync(file, 'utf8')) || {};
+      } catch {
+        continue; // 解析不了就别动
+      }
+    }
+    const fresh = data === null;
+    data = data || { hasCompletedOnboarding: true, hasSeenAutoDefaultNotice: true };
+    const projects = { ...(data.projects || {}) };
+    let local = false;
+    for (const key of trustKeys()) {
+      if (projects[key] && projects[key].hasTrustDialogAccepted === true) continue;
+      projects[key] = { ...(projects[key] || {}), hasTrustDialogAccepted: true };
+      local = true;
+    }
+    if (!local && !fresh) continue;
+    data.projects = projects;
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+      changed = true;
+    } catch {
+      /* 写不了就算了，最多再弹一次确认框 */
+    }
+  }
+  return changed;
 }
 
 function repairClaudeTrustFile(roots) {
@@ -283,6 +435,11 @@ function repairClaudeTrustFile(roots) {
 }
 
 function main() {
+  // 与数据库无关，先做：保证 Claude Code 开箱即用、欢迎界面不被警告刷屏。
+  if (!checkOnly) {
+    if (ensureWorkspaceTrust()) log('已预置工作区信任（Claude Code 不再弹英文的信任确认）');
+    if (ensureClaudeSettings()) log('已写入 Claude Code 设置（模型别名 + 中文状态行）');
+  }
   if (!fs.existsSync(DB_PATH)) {
     log('数据库不存在，跳过');
     return;

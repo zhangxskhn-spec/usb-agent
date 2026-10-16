@@ -73,8 +73,51 @@
 | [1] 网页界面 | 浏览器图形界面；模型在页面右下角下拉随意切换 MiMo / DeepSeek，无需重开 |
 | [2] 终端版 | 命令行界面（Claude Code 原生 TUI），默认 DeepSeek Flash |
 | [3] 环境自检 | 一键检查运行时/密钥是否正常 |
-| [4] 释放 U 盘 | 结束本包拉起的全部进程（网关／网页壳／Claude Code／本会话浏览器），随后即可安全弹出 |
+| [4] 释放 U 盘 | 四层扫描 + 卷锁判定，结束占用进程并**真正弹出**（`tools\usb-eject.bat`） |
 | [0] 退出 | 只停网关并退出菜单（浏览器窗口需自己关） |
+
+## 终端版（菜单 `[2]`）怎么用
+
+进去就是**官方 Claude Code 的界面**，回车键下方常驻一行中文提示：
+
+```
+小张claude  ·  当前模型 MiMo V2.6 Flash   |   换模型 /model   ·   换模式 Shift+Tab   ·   退出 /exit
+```
+
+| 想干什么 | 怎么做 |
+|---|---|
+| 换模型（4 个可选） | 输入 `/model` 回车，方向键选、回车确认 |
+| 换权限模式 | 按 `Shift + Tab` 循环（`auto` 自动放行 / `manual` 每次问） |
+| 看全部命令 | 输入 `/help` 回车 |
+| 退出回启动器菜单 | 输入 `/exit` 回车 |
+
+**底部那行英文模式提示的中文对照**（状态行第二行就贴在它正上方）：
+
+| 底部英文 | 中文 | 含义 |
+|---|---|---|
+| `manual mode on` | 手动模式 | 改文件、跑命令前都先问你（默认） |
+| `auto mode on` | 自动模式 | 常规操作自动放行，不再逐条确认 |
+| `accept edits on` | 接受编辑 | 文件修改直接落盘，跳过逐次确认 |
+| `plan mode on` | 计划模式 | 只出方案、先不动文件，你点头才开工 |
+
+**启动默认就是 `accept edits`（接受编辑）**——改文件不再逐条问你，一进去就能直接干活；想更谨慎就按 `Shift + Tab` 切回 `manual`。官方还有个 `auto mode`（自动判断安不安全），但它依赖官方的模型分类器，这套网关模型拿不到——Claude Code 会直接提示 `auto mode unavailable for this model`（把模型名换成官方的也一样），所以默认给了最接近的 `accept edits`。
+
+`/model` 里就这 5 行（`Default` + 4 个模型，与网页端下拉完全一致）：
+
+```
+  1. Default (recommended)   Use the default model
+  2. MiMo V2.6 Pro           小米 MiMo · 复杂推理，慢一些
+  3. MiMo V2.6 Flash         小米 MiMo · 响应最快，日常问答、写文案
+  4. DeepSeek V4.1 Flash     DeepSeek · 现役主力，代码、长文
+  5. DeepSeek V4 Pro         DeepSeek · 更强推理，稍慢
+```
+
+> 这 4 个名字是**逐个发真实请求验过**的（都能通）。注意「DeepSeek V4.1 Flash」的上游模型 id
+> 其实是 `deepseek-flash`——它才是现役 id，写 `deepseek-v4.1-flash` 会被 DeepSeek 端点拒掉。
+> 另外 Default 行那个 `[1m]` 是「100 万上下文」标记，网关转发前会自动剥掉，不影响使用。
+
+- **不再有英文的信任确认框**：以前启动会先弹一句 `Is this a project you created or one you trust?` 要你选 No/Yes，现在启动器已把本工作区预置为「已信任」，直接进聊天界面。
+- **界面文案本身是英文**（Claude Code 官方没有中文版，这一层改不了）；但**对话内容始终是中文**（`data/home/.claude/CLAUDE.md` 里已写死「始终使用简体中文回复」）。
 
 ## 用完怎么安全弹出（U 盘“正在使用中”怎么办）
 
@@ -93,23 +136,43 @@
 （早期版本把网关做成脱离控制台的游离进程、浏览器用 `start` 拉起，才会出现「关窗也没用」。）
 常规退出走 `[0] 退出`，会显式结束网关、监督者和本会话浏览器（`stop-all`）。
 
-若还是弹不出来，双击 `tools\eject-usb.bat`（或菜单 `[4]`）——它做**两轮扫描**并结束命中的进程：
+若还是弹不出来，双击 `tools\usb-eject.bat`（或菜单 `[4]`）。它做**四层扫描**并结束命中的进程：
 
-1. 命令行 / 可执行文件里出现本包目录的进程；
-2. **加载了本包文件（DLL/EXE）的进程**——这类占用者的命令行里根本看不到路径，却是
-   “明明没开什么东西、盘就是弹不出来”的常见元凶（实测抓过一只把组件 DLL 装在 U 盘上的 Edge 子进程）。
+1. 命令行 / 可执行文件路径指向该盘；
+2. **加载了该盘上 DLL/EXE 的进程**——这类占用者的命令行里根本看不到路径，却是
+   “明明没开什么东西、盘就是弹不出来”的常见元凶（实测抓过一只把组件 DLL 装在 U 盘上的 Edge 子进程）；
+3. **工作目录停在该盘上的进程**（读进程 PEB）——实测证实：一个 cmd 窗口只要工作目录是 U 盘，
+   哪怕它什么都不干，卷也锁不住、弹不出来。所以启动器菜单 `[4]` 现在会先把自己窗口的工作目录
+   挪到 `C:\Windows` 再交接；
+4. 包内 `data\run\*.pid` 记录的网关／监督者／浏览器。
+
+然后它用**「安全删除硬件」内部那把锁做权威判定**：Windows 只会说“该设备正在使用中”，不会告诉你为什么；
+工具最后会对卷做一次 `FSCTL_LOCK_VOLUME`——锁得上就一定弹得出，锁不上就打印确切的 Win32 错误码。实测规律：
+
+| 场景 | 扫描器 | 卷锁判定 |
+|---|---|---|
+| 什么都没跑 | 干净 | ✅ 直接弹出 |
+| cmd 的工作目录停在 U 盘 | ✅ 抓到 | ❌ Win32 5 拒绝访问 |
+| U 盘上的 `node.exe` 在跑 | ✅ 三条理由全中 | ❌ Win32 5 |
+| 别的进程开着 U 盘上的文件 | ❌ 四层都看不到 | ❌ 只有这把锁能判定 |
+
+锁不上时它会依次建议：关掉打开着 U 盘目录的资源管理器窗口 → 关掉黑窗 → 暂停杀毒实时扫描 →
+加 `-Force`（`mountvol E: /p` 强制下线，会清掉盘符）→ 最后才是注销/重启。
 
 ```cmd
-tools\eject-usb.bat --check                          :: 只看谁在占用，不动手
-tools\eject-usb.bat --check --root "E:\usb-agent"     :: 换过盘符/盘里另有一份时指定那个目录
-tools\eject-usb.bat --fast                            :: 跳过第二轮深度扫描，快一点
+tools\usb-eject.bat                    :: 双击也行，默认处理自己所在的那个盘
+tools\usb-eject.bat E:                 :: 指定盘符（换过盘符、盘里另有一份时）
+tools\usb-eject.bat E: -Check          :: 只诊断，不结束进程、不弹出
+tools\usb-eject.bat E: -Force          :: 锁定失败时强制 mountvol /p
 ```
 
-如果连它也扫不到、Windows 还是不让弹，按脚本最后打印的清单一条条试：
-**关掉打开着 U 盘目录的资源管理器窗口 → 关掉黑窗 → 等 10 秒（写缓存回刷）→ 重启。**
+> 这个工具是**纯批处理 + PowerShell**，不依赖包内的 Node/runtime —— 就算 runtime 展开失败、
+> 网关起不来，它照样能用。它还会先把自己复制到 `%TEMP%` 再运行，因为**一个正在运行的 .bat 本身
+> 就持有它所在盘的句柄**，而 cmd 的工作目录也会留在那个盘上，这两条都会让卷永远锁不住（同样实测确认）。
+> 老版 `tools\eject-usb.bat` 现在只是转发壳；Node 版 `tools\release-usb.mjs`（两轮扫描）仍保留可用。
 
-> 注意：浏览器是我们用 `data\browser-profile` 单独启动的，和宿主机的浏览器是两个进程，
-> 关掉宿主机自己的浏览器没用，要让本脚本或 `[4]` 把它关掉。
+> 注意：浏览器是我们单独启动的，和宿主机自己的浏览器是两个进程，
+> 关掉宿主机自己的浏览器没用，要让本工具或 `[4]` 把它关掉。
 
 
 ## 目录结构
@@ -133,7 +196,9 @@ usb-agent\
 ├─ tools\
 │   ├─ selfcheck.bat    环境自检
 │   ├─ stop-gw.bat      停止本启动器拉起的后台网关
-│   ├─ eject-usb.bat    释放 U 盘：结束网关/网页壳/Claude Code/本会话浏览器（--check 只查看）
+│   ├─ usb-eject.bat    安全弹出 U 盘：四层扫描 + FSCTL_LOCK_VOLUME 权威判定 + 真正弹出（双击即用）
+│   ├─ usb-eject.ps1    上面那个的实现（纯 PowerShell，不依赖包内 runtime）
+│   ├─ eject-usb.bat    旧名，现在只是转发到 usb-eject.bat
 │   ├─ runtime-home.bat 解析运行时可用的 runtime 目录；瘦身布局时首次展开到本机（START.bat 会调）
 │   ├─ deploy-to-usb.bat 一条命令部署到 U 盘（runtime 只留一个 zip + 多线程同步）
 │   ├─ zip-util.mjs     自写的 zip 打包器（系统 tar 打这个包会静默丢文件，见 patches/README.md）
@@ -144,7 +209,7 @@ usb-agent\
 │   ├─ unpack-on-usb.bat 在 U 盘上解开整包 zip
 │   ├─ anthropic-gw.mjs 本地模型网关（MiMo/DeepSeek 自动路由，默认从 4567 起选空闲端口）
 │   ├─ portable-runtime.mjs 端口探测 / 网关启停
-│   ├─ release-usb.mjs  释放 U 盘的实现（命令行 + 已加载模块两轮匹配）
+│   ├─ release-usb.mjs  释放 U 盘的 Node 版实现（命令行 + 已加载模块两轮匹配）
 │   └─ build-frontend.py 前端界面补丁构建器（仅在开发副本上跑）
 │   （同目录下另有若干 .bat / .mjs 辅助脚本，均为可选工具）
 └─ workspace\           Claude 的默认工作目录
@@ -253,7 +318,7 @@ tools\sync-to-usb.bat E          :: 只同步程序文件与 data，不动 runti
   `runtime\node\node_modules\@cloudcli-ai\cloudcli\.env`，把 `HOST=127.0.0.1` 改成 `HOST=0.0.0.0` 后重启；
 - 网页壳的登录库、会话数据都存放在 `data\home\.cloudcli\` 与 `data\home\.claude\`（随身携带）；
 - **普通对话归属**：「新对话」产生的普通问答在数据库里记为便携哨兵 `@plain`（不绑定某台电脑的绝对路径），运行时工作目录自动解析到 `workspace\`——拷到 U 盘换电脑后旧普通对话依然可见、不会被识别成伪项目。从旧版升级后跑一次 `python tools\migrate-plain-chats.py` 即可把历史普通对话一并迁移（`--dry` 可预览）；
-- **换电脑/换盘符自动修复**：启动器会先运行 `tools\repair-portable-state.mjs`，把数据库里旧电脑的 Claude JSONL transcript 路径重新定位到当前 `data\home\.claude\projects\`，并修复 U 盘工作区项目与 Claude 信任路径。迁移只改能在当前 U 盘找到的文件，外部电脑项目仍会保留为本机路径；可运行 `runtime\node\node.exe tools\repair-portable-state.mjs --check` 查看状态。
+- **换电脑/换盘符自动修复**：启动器会先运行 `tools\repair-portable-state.mjs`，把数据库里旧电脑的 Claude JSONL transcript 路径重新定位到当前 `data\home\.claude\projects\`，并修复 U 盘工作区项目与 Claude 信任路径（顺带预置本工作区「已信任」、写入模型别名与中文状态行到 `data\home\.claude\settings.json`）。迁移只改能在当前 U 盘找到的文件，外部电脑项目仍会保留为本机路径；可运行 `runtime\node\node.exe tools\repair-portable-state.mjs --check` 查看状态。
 - **Transcript 增量同步**：Claude 会话首次发现后把文件大小、修改时间和相对路径索引保存到 `data\home\.cloudcli\claude-transcript-index.json`。后续扫描只重新解析新增或实际变化的 JSONL，换盘符时按相对路径继续命中；索引损坏会自动回退为完整扫描。
 - **清理可重建缓存**：需要腾出 U 盘空间时运行 `runtime\node\node.exe tools\prune-portable-cache.mjs` 先预览，确认后加 `--apply`；加 `--trim-runtime` 会同时删除 Node 依赖里的 source map（不影响运行）。不会清理会话、数据库、登录状态或 workspace。
 - 终端版无需任何服务，直接就是 Claude Code 原生界面。
@@ -295,7 +360,10 @@ tools\sync-to-usb.bat E          :: 只同步程序文件与 data，不动 runti
   `tools\deploy-to-usb.bat E` 重新部署，或把 `runtime\` 目录直接放到包里（老布局）。
 - **U 盘拷得特别慢**：先看 U 盘文件系统是不是 FAT32——是的话按上文「拷到 U 盘」第一步转成 NTFS，
   再用 `tools\deploy-to-usb.bat E` 部署（runtime 只留一个 zip）。
-- **弹出 U 盘提示「该设备正在使用中」**：说明还有本包的进程活着。双击 `tools\eject-usb.bat`（或启动器菜单 `[4]`）一键结束——它会做命令行扫描 + **已加载本包 DLL/EXE 的进程扫描**两轮；想先看是谁在占用就加 `--check`。常见原因见上文「用完怎么安全弹出」。
+- **弹出 U 盘提示「该设备正在使用中」**：双击 `tools\usb-eject.bat`（或启动器菜单 `[4]`）。它做**四层扫描**
+  （命令行／已加载该盘 DLL-EXE／**工作目录停在该盘的进程**／包内 pid 文件），最后用 `FSCTL_LOCK_VOLUME`
+  给出权威判定——锁得上就一定弹得出，锁不上会打印确切 Win32 错误码。只想看是谁在占用就加 `-Check`；实在顽固加 `-Force`。
+  常见原因见上文「用完怎么安全弹出」。
 - **启动后「Gateway health check timed out」（网关健康检查超时）**：模型用不了就是它。
   先 `runtime\node\node.exe tools\portable-runtime.mjs stop-all` 再重启；仍不行看
   `data\home\logs\gw.log`（需 `set GW_LOG=1`）。
@@ -306,6 +374,7 @@ tools\sync-to-usb.bat E          :: 只同步程序文件与 data，不动 runti
 - **发消息报错「Claude Code native binary at … exists but failed to launch」**：这句提示**与二进制无关**（它是 Claude Agent SDK 的通用模板，照抄了 Linux 下 libc 不匹配的说法），真实原因几乎总是**该会话所属的项目文件夹不存在**——Claude Code 必须在该目录里启动，`cwd` 不存在时 libuv 起子进程会直接返回 `ENOENT`，SDK 见「文件在、却启动失败」就报了这句话。启动器每次启动都会跑 `tools\repair-portable-state.mjs`：包自身路径（`data\home`、`app\webui`、旧包根下的任何位置）会自动并回「普通对话」；真正被删掉的外部项目则会在启动窗口列出警告，照提示在侧栏项目行 ⋯ 里「移除项目」或重新选文件夹建项目即可。手工体检：`runtime\node\node.exe tools\repair-portable-state.mjs --check`（会列出所有「文件夹不存在」的项目）。
 - 网页打不开：看窗口里提示的端口，再手动访问；重新双击 `START.bat` 时会自动避开占用端口。
 - **界面看着"没变化"（菜单/按钮还是旧的）**：浏览器按 `Ctrl + F5` 强制刷新一次。
+- **终端版（菜单 `[2]`）整屏发灰、左上角图标像块糊掉的白块、不像官方 Claude Code**：Claude Code 在 `TERM=dumb` 时会**关闭全部配色**（官方橙色、蓝色标题全没了）。启动器已显式清掉这个变量；启动前「N 个项目文件夹不存在」的路径修复噪音、以及「未知模型」警告也已一并处理（详见 `patches/README.md` 第 3 节 `START.bat` 与 `tools/repair-portable-state.mjs`）。改完在 U 盘上跑一次 `tools\sync-to-usb.bat E` 生效。
 - 终端模式：输入 `/exit` 退出 Claude Code 回到菜单。
 - 提示「还没有配置 xx 密钥」：编辑 `config\keys.env` 填好后重试。
 
