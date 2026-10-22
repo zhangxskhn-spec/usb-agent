@@ -40,6 +40,7 @@ FILES = [
     "dist-server/server/modules/database/repositories/session-drafts.db.js",
     "dist-server/server/modules/providers/list/claude/claude-models.provider.js",
     "dist-server/server/modules/providers/services/provider-models.service.js",
+    "dist-server/server/modules/providers/services/provider-capabilities.service.js",
     "dist-server/server/modules/commands/commands.routes.js",
     "dist/sw.js",
 ]

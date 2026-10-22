@@ -98,17 +98,16 @@ if defined MIMO_API_KEY (echo   MiMo key:      OK) else (echo   MiMo key:      M
 if defined DEEPSEEK_API_KEY (echo   DeepSeek key:  OK) else (echo   DeepSeek key:  Missing)
 echo   Config:        config\keys.env
 echo   Runtime:       %USBAI_RUNTIME%
+if defined WEB_RUNNING (echo   Web:           running on http://127.0.0.1:%WEBPORT%) else (echo   Web:           not started)
 echo.
-echo   [1] Web interface
+echo   [1] Web interface      (runs in background, this menu stays open)
 echo   [2] Terminal (Claude Code)
 echo   [3] Environment self-check
-echo   [4] Release USB (stop everything, then eject safely)
-echo   [0] Exit
+echo   [0] Exit                 (stop every project process; eject USB yourself)
 echo.
-choice /c 12304 /n /m "Select: "
+choice /c 1230 /n /m "Select: "
 set "SELECTED=%ERRORLEVEL%"
 if "%SELECTED%"=="4" goto :cleanup
-if "%SELECTED%"=="5" goto :release
 if "%SELECTED%"=="3" (
   call "%ROOT%\tools\selfcheck.bat"
   pause
@@ -125,6 +124,9 @@ if "%SELECTED%"=="1" (
 goto :menu
 
 :start_services
+rem Gateway and ports are resolved once per launcher session. Re-entering the
+rem menu must not spawn a second gateway or a second web server.
+if defined SERVICES_UP goto :dispatch
 pushd "%ROOT%"
 for /f "delims=" %%P in ('call "%USBAI_RUNTIME%\node\node.exe" "%ROOT%\tools\portable-runtime.mjs" find-port 3001') do set "WEBPORT=%%P"
 for /f "delims=" %%P in ('call "%USBAI_RUNTIME%\node\node.exe" "%ROOT%\tools\portable-runtime.mjs" find-port 4567') do set "GWPORT=%%P"
@@ -165,47 +167,87 @@ for /l %%I in (1,1,20) do (
   )
 )
 if defined GATEWAY_READY (echo       Gateway ready.) else echo       [WARN] Gateway health check timed out.
+set "SERVICES_UP=1"
 
+:dispatch
 if "%MODE%"=="term" goto :terminal
+goto :web
 
+:web
+if defined WEB_RUNNING (
+  echo.
+  echo       Web server is already running on http://127.0.0.1:%WEBPORT%
+  echo       Opening the browser again...
+  start "" /b cmd /c ""%ROOT%\tools\open-when-ready.bat" %WEBPORT% >> "%ROOT%\data\run\open-browser.log" 2>&1"
+  timeout /t 2 >nul
+  goto :menu
+)
 echo [2/2] Starting web interface on http://127.0.0.1:%WEBPORT%
 echo       Browser profile: (this machine) usb-agent-browser-profile
-echo       Close this window before safely ejecting the USB drive.
+echo       The server runs in the background -- this menu stays usable.
 echo.
-start "" /b "%ROOT%\tools\open-when-ready.bat" %WEBPORT%
+if not exist "%ROOT%\data\run" mkdir "%ROOT%\data\run" >nul 2>&1
 pushd "%ROOT%\app\webui"
-call "%USBAI_RUNTIME%\node\cloudcli.cmd" start
+start "" /b cmd /c ""%USBAI_RUNTIME%\node\cloudcli.cmd" start >> "%ROOT%\data\run\webui.log" 2>&1"
 popd
-goto :cleanup
+set "WEB_RUNNING=1"
+rem Wait until the port actually answers before showing the menu again.
+rem Without this the menu reappears in 2s while cloudcli is still booting, so
+rem (a) the status flashes past and (b) pressing [0] too early cannot find the
+rem listener and leaves the server running.
+set "WEB_READY="
+for /l %%I in (1,1,15) do (
+  if not defined WEB_READY (
+    "%USBAI_RUNTIME%\node\node.exe" -e "fetch('http://127.0.0.1:%WEBPORT%/').then(()=>process.exit(0)).catch(()=>process.exit(1))" >nul 2>&1
+    if not errorlevel 1 set "WEB_READY=1"
+    if not defined WEB_READY ping -n 2 127.0.0.1 >nul
+  )
+)
+if defined WEB_READY (echo       Web ready on http://127.0.0.1:%WEBPORT%) else (echo       [WARN] No response after 15s - see data\run\webui.log)
+start "" /b cmd /c ""%ROOT%\tools\open-when-ready.bat" %WEBPORT% >> "%ROOT%\data\run\open-browser.log" 2>&1"
+echo       Logs: data\run\webui.log + open-browser.log
+echo       Use [0] when you are done -- it stops every process.
+echo.
+goto :menu
 
 :terminal
 echo [2/2] Starting Claude Code in workspace\
-echo       Type /exit to return to this menu.
+echo       Type /exit to come back to this menu.
+echo.
+echo   Permission mode: Auto (Shift+Tab cycles Auto / Plan / Allow all / Manual)
+set "WBPM=--permission-mode acceptEdits"
 echo.
 pushd "%ROOT%\workspace"
-call "%USBAI_RUNTIME%\node\claude.cmd"
+rem --allow-dangerously-skip-permissions only authorises bypass, it does not force it.
+call "%USBAI_RUNTIME%\node\claude.cmd" %WBPM% --allow-dangerously-skip-permissions
 popd
-goto :cleanup
+echo.
+echo Back to the menu. The local gateway is still running.
+echo Choose [0] when you want to stop every process.
+timeout /t 3 >nul
+goto :menu
 
 :cleanup
+rem Full shutdown: the browser supervisor and its browser children can keep a
+rem working directory or loaded module on the USB even when the profile lives
+rem on the host. Stop the web listener first, then stop every package process.
+call :kill_web
 if exist "%USBAI_RUNTIME%\node\node.exe" (
   "%USBAI_RUNTIME%\node\node.exe" "%ROOT%\tools\portable-runtime.mjs" stop-all >nul 2>&1
 )
 echo.
-echo Stopped the gateway and the browser opened for this pack.
-echo If Windows still refuses to eject the USB drive, run menu [4]
-echo (or tools\usb-eject.bat) to end everything holding the drive.
+echo Stopped the gateway, web server, browser, and package supervisors.
+echo The project is closed. Close any Explorer window or preview pane on this drive,
+echo then eject the USB from the Windows tray.
+rem Move this launcher off the USB before it exits, so its working directory
+rem cannot keep the volume busy while the user ejects it.
+cd /d "%SystemRoot%"
 endlocal
 exit /b 0
 
-:release
-rem Move this window's own working directory off the USB before handing over.
-rem A cmd window whose CWD sits on the drive keeps the volume locked, so
-rem leaving it there would make the drive impossible to eject (verified with
-rem FSCTL_LOCK_VOLUME). The hand-over itself runs from %TEMP% on the host disk.
-cd /d "%SystemRoot%"
-echo.
-echo Opening the safe-eject helper in a new window...
-call "%ROOT%\tools\usb-eject.bat"
-goto :menu
-
+:kill_web
+rem End the background web server (cloudcli) for this session. The listener
+rem has no package pid file, so close its process tree before stop-all.
+if not defined WEBPORT goto :eof
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":%WEBPORT% " ^| findstr LISTENING') do taskkill /T /F /PID %%P >nul 2>&1
+goto :eof

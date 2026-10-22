@@ -25,7 +25,13 @@ set "DRIVE=%~1"
 if "%DRIVE%"=="" set "DRIVE=%~d0"
 set "EXTRAS=%~2 %~3 %~4"
 
-set "STAGE=%TEMP%\usb-eject-stage"
+rem START.bat sets AI_REAL_USERPROFILE before redirecting TEMP to the USB.
+rem Prefer the real user's local temp when launched from the portable app.
+if defined AI_REAL_USERPROFILE (
+  set "STAGE=%AI_REAL_USERPROFILE%\AppData\Local\Temp\usb-eject-stage"
+) else (
+  set "STAGE=%TEMP%\usb-eject-stage"
+)
 if not exist "%STAGE%" mkdir "%STAGE%" >nul 2>&1
 
 if not exist "%~dp0usb-eject.ps1" (
@@ -44,7 +50,7 @@ if not exist "%STAGE%\usb-eject.ps1" goto :stagefail
 rem Move our own working directory off the USB, then hand over and get out of
 rem the way so not a single handle of ours is left on the drive.
 cd /d "%SystemRoot%"
-start "USB Eject" "%STAGE%\run.bat" --inner "%DRIVE%" %EXTRAS%
+start "USB Eject" /D "%STAGE%" "%ComSpec%" /d /c run.bat --inner %DRIVE% %EXTRAS%
 exit /b 0
 
 :stagefail

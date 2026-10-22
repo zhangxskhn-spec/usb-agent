@@ -409,6 +409,18 @@
    "marker": "// [patched] 清理当前缓存里累积的旧版入口 bundle（每次构建文件名带版本号，",
    "find": "          .map(name => caches.delete(name))\n      )\n    )\n  );\n",
    "replace": "          .map(name => caches.delete(name))\n      )\n    ).then(() =>\n      // [patched] 清理当前缓存里累积的旧版入口 bundle（每次构建文件名带版本号，\n      // 旧 index-*.js 永远不会再被引用，每版 ~3.4MB）。当前版本以 index.html 为准；\n      // 取不到 index.html（离线）时跳过清理，绝不动在用版本。\n      fetch('/index.html', { cache: 'no-store' }).then(r => r.ok ? r.text() : '').then(html => {\n        const m = html && html.match(/\\/assets\\/(index-[^/]+\\.js)/);\n        const current = m ? m[1] : null;\n        if (!current) return;\n        return caches.open(CACHE_NAME).then(cache =>\n          cache.keys().then(requests =>\n            Promise.all(\n              requests\n                .filter(req => {\n                  const p = new URL(req.url).pathname;\n                  return /\\/assets\\/index-[^/]*\\.js$/.test(p) && !p.endsWith('/' + current);\n                })\n                .map(req => cache.delete(req))\n            )\n          )\n        );\n      }).catch(() => { /* 离线则跳过清理 */ })\n    )\n  );\n"
+  },
+  {
+   "file": "dist-server/server/modules/providers/services/provider-capabilities.service.js",
+   "marker": "// [patched] 便携版只留 3 档：手动(default) / 自动(acceptEdits) / 全部允许(bypassPermissions)。",
+   "find": "    claude: {\n        provider: 'claude',\n        permissionModes: ['default', 'auto', 'acceptEdits', 'bypassPermissions', 'plan'],\n        defaultPermissionMode: 'default',\n",
+   "replace": "    claude: {\n        provider: 'claude',\n        // [patched] 便携版只留 3 档：手动(default) / 自动(acceptEdits) / 全部允许(bypassPermissions)。\n        //   · auto 在本包不可用（靠官方模型分类器，网关不是真 Anthropic 端点）；\n        //   · plan 属于任务规划、不是权限档位，混在这里容易误选；\n        //   · 其余档位仍被 CLI 认识，只是不暴露给用户。\n        permissionModes: ['default', 'acceptEdits', 'bypassPermissions'],\n        // [patched] 新会话默认落在「自动」（改文件不再逐条问，跑命令仍会确认），\n        //   与 settings.json 的 permissions.defaultMode 保持一致，避免网页端默认行为和终端版分叉。\n        defaultPermissionMode: 'acceptEdits',\n"
+  },
+  {
+   "file": "dist-server/server/modules/providers/list/claude/claude-runtime.provider.js",
+   "marker": "// [patched] 便携版：'default'（手动）也要显式传下去。",
+   "find": "    if (permissionMode && permissionMode !== 'default') {\n        sdkOptions.permissionMode = permissionMode;\n    }\n    const settings = toolsSettings || {\n        allowedTools: [],\n        disallowedTools: [],\n        skipPermissions: false\n    };\n    if (settings.skipPermissions && permissionMode !== 'plan') {\n        sdkOptions.permissionMode = 'bypassPermissions';\n    }\n",
+   "replace": "    // [patched] 便携版：'default'（手动）也要显式传下去。\n    //   这个 provider 会加载用户级 settings（settingSources 含 'user'），而\n    //   settings.json 里的 permissions.defaultMode = acceptEdits 是给终端版用的默认值。\n    //   一旦这里不传 --permission-mode，SDK/CLI 就直接吃那个默认值 ——\n    //   网页上选「手动」实际仍在自动接受编辑，表现就是\"换了权限没效果\"。\n    if (permissionMode) {\n        sdkOptions.permissionMode = permissionMode;\n    }\n    const settings = toolsSettings || {\n        allowedTools: [],\n        disallowedTools: [],\n        skipPermissions: false\n    };\n    if (settings.skipPermissions && permissionMode !== 'plan') {\n        sdkOptions.permissionMode = 'bypassPermissions';\n    }\n    // [patched] bypassPermissions 还必须同时打开 allowDangerouslySkipPermissions。\n    //   Claude Code CLI 的规则是：没有这个标志就当「未授权绕过」，把模式静默降级回 default\n    //   （permission_mode 那条 case 直接 break）。不补这一行，「全部允许」永远选不动。\n    if (sdkOptions.permissionMode === 'bypassPermissions') {\n        sdkOptions.allowDangerouslySkipPermissions = true;\n    }\n"
   }
  ]
 }

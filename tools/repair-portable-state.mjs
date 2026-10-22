@@ -276,7 +276,7 @@ function reportBrokenProjects(broken, label) {
  *    不加它的话，/model 里会混进用不了的 Claude 模型（网关根本不提供），以及
  *    START.bat 为映射 Opus/Sonnet/Haiku 三档而设的 ANTHROPIC_DEFAULT_*_MODEL
  *    带来的三行重复「Custom ··· model」，看着很乱。
- * ② statusLine：输入框上方常驻一行中文速查（当前模型 / 换模型 / 换模式 / 退出）+ 一行
+ * ② statusLine：输入框上方常驻一行中文速查（当前模型 / 换模型 / 换权限 / 退出）+ 一行
  *    模式中英对照，解决「不知道怎么用」。命令里写的是 node.exe 与脚本的绝对路径——实测
  *    状态行命令走的是 sh 而不是 cmd，`%VAR%` 不会展开，所以只能用绝对路径；而它是每台
  *    机器启动时现算的，换盘符/换机器都会自动更新。运行时目录取自 USBAI_RUNTIME
@@ -338,6 +338,12 @@ function ensureClaudeSettings() {
     // 只留 Default + 下面这几行，隐藏内置 Claude 阵容与三档 Custom 重复行
     modelPicker: { replaceBuiltInOptions: true, options: modelPickerRows() },
     statusLine: { type: 'command', command: statuslineCommand() },
+    // 预置「已接受全部允许的免责声明」。
+    // 官方 schema 原话：skipDangerousModePermissionPrompt =
+    //   "Whether the user has accepted the bypass permissions mode dialog"。
+    // 不预置的话，终端第一次 Shift+Tab 切到 bypass 会弹一个英文确认框，
+    // 而且 --bg（后台）场景没接受过会直接报错要求先交互式跑一次。
+    skipDangerousModePermissionPrompt: true,
   };
   let changed = false;
   for (const [key, value] of Object.entries(want)) {
@@ -360,10 +366,103 @@ function ensureClaudeSettings() {
     data.permissions = permissions;
     changed = true;
   }
+  // 把 auto 从终端 Shift+Tab 的循环里摘掉。
+  // 官方键 permissions.disableAutoMode（describe 原文："Disable auto mode"）。
+  // auto 在本包**永远不可用**（要靠官方模型分类器，网关不是真 Anthropic 端点），
+  // 留在循环里只会让人误选一次、然后看到 auto mode unavailable 的黄字提示。
+  if (permissions.disableAutoMode !== 'disable') {
+    permissions.disableAutoMode = 'disable';
+    data.permissions = permissions;
+    changed = true;
+  }
   if (!changed) return false;
   fs.mkdirSync(CLAUDE_HOME, { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
   return true;
+}
+
+/**
+ * 恢复 Shift+Tab 的内置权限切换（2026-10-22）。
+ *
+ * Claude Code 的内置循环由二进制里的模式数组决定；启动时会由
+ * ensureClaudePermissionCycle() 把官方六档数组替换成三档：
+ * `default → acceptEdits → bypassPermissions → default`。
+ * 这里清理旧版本曾写入的 `shift+tab: null`，否则快捷键会继续被解绑。
+ * 用户自定义的其它键位原样保留，兼容顶层数组与 `{ "bindings": [...] }`。
+ */
+function ensureKeybindings() {
+  const file = path.join(CLAUDE_HOME, 'keybindings.json');
+  if (!exists(file)) return false;
+  let root;
+  let asArray = false;
+  try {
+    root = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return false; // 用户手改坏了，别覆盖
+  }
+  asArray = Array.isArray(root);
+  const list = asArray ? root : root && root.bindings;
+  if (!Array.isArray(list)) return false;
+  const blockIndex = list.findIndex((b) => b && b.context === 'Chat');
+  if (blockIndex < 0) return false;
+  const block = list[blockIndex];
+  if (!block.bindings || typeof block.bindings !== 'object' || block.bindings['shift+tab'] !== null) return false;
+  const bindings = { ...block.bindings };
+  delete bindings['shift+tab'];
+  if (Object.keys(bindings).length === 0) list.splice(blockIndex, 1);
+  else block.bindings = bindings;
+  const out = asArray ? list : { ...root, bindings: list };
+  fs.mkdirSync(CLAUDE_HOME, { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(out, null, 2)}\n`, 'utf8');
+  return true;
+}
+
+/**
+ * Keep Shift+Tab limited to the three supported permission modes.
+ * The replacement is deliberately equal-length so the packaged executable
+ * remains structurally unchanged. If a future Claude build changes the
+ * anchor, leave it untouched instead of guessing at binary offsets.
+ */
+function ensureClaudePermissionCycle() {
+  const files = [
+    path.join(ROOT, 'runtime', 'node', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'),
+    path.join(ROOT, 'runtime', 'node', 'node_modules', '@anthropic-ai', 'claude-code', 'node_modules', '@anthropic-ai', 'claude-code-win32-x64', 'claude.exe'),
+    path.join(ROOT, 'runtime', 'node', 'node_modules', '@cloudcli-ai', 'cloudcli', 'node_modules', '@anthropic-ai', 'claude-agent-sdk-win32-x64', 'claude.exe'),
+  ].filter(exists);
+  if (files.length === 0) return false;
+  const oldModes = Buffer.from('Co=["default","acceptEdits","plan","auto","bypassPermissions","dontAsk"]', 'utf8');
+  const newModes = Buffer.from('Co=["default","acceptEdits","bypassPermissions","default","acceptEdits"]', 'utf8');
+  if (oldModes.length !== newModes.length) return false;
+  let anyChanged = false;
+  for (const file of files) {
+    const binary = fs.readFileSync(file);
+    let changed = false;
+    if (!binary.includes(newModes)) {
+      const offset = binary.indexOf(oldModes);
+      if (offset >= 0) {
+        newModes.copy(binary, offset);
+        changed = true;
+      }
+    }
+
+    // Hide the built-in status text only. Claude ships the phrase twice: once
+    // in the mode label table and once in the compact terminal renderer's text
+    // list. Replace every exact copy with equal-length spaces; the mode value,
+    // icon, and Plan-mode behavior remain untouched.
+    const visible = Buffer.from('plan mode on', 'utf8');
+    const hidden = Buffer.from('            ', 'utf8');
+    let labelOffset = -1;
+    while ((labelOffset = binary.indexOf(visible, labelOffset + 1)) >= 0) {
+      hidden.copy(binary, labelOffset);
+      changed = true;
+    }
+
+    if (changed) {
+      fs.writeFileSync(file, binary);
+      anyChanged = true;
+    }
+  }
+  return anyChanged;
 }
 
 /**
@@ -395,8 +494,11 @@ function ensureWorkspaceTrust() {
     }
     const fresh = data === null;
     data = data || { hasCompletedOnboarding: true, hasSeenAutoDefaultNotice: true };
+    // 与 settings.json 的 skipDangerousModePermissionPrompt 配套（两个键官方都在看）：
+    // 只写 settings 那个的话，--bg / 某些恢复路径仍会认为「没接受过」。
+    let local = data.bypassPermissionsModeAccepted !== true;
+    if (local) data.bypassPermissionsModeAccepted = true;
     const projects = { ...(data.projects || {}) };
-    let local = false;
     for (const key of trustKeys()) {
       if (projects[key] && projects[key].hasTrustDialogAccepted === true) continue;
       projects[key] = { ...(projects[key] || {}), hasTrustDialogAccepted: true };
@@ -439,6 +541,8 @@ function main() {
   if (!checkOnly) {
     if (ensureWorkspaceTrust()) log('已预置工作区信任（Claude Code 不再弹英文的信任确认）');
     if (ensureClaudeSettings()) log('已写入 Claude Code 设置（模型别名 + 中文状态行）');
+    if (ensureClaudePermissionCycle()) log('已启用三档权限切换并隐藏 Plan mode 状态文字');
+    if (ensureKeybindings()) log('已恢复 Shift+Tab 默认权限快捷键');
   }
   if (!fs.existsSync(DB_PATH)) {
     log('数据库不存在，跳过');

@@ -6,6 +6,8 @@
 # runtime/ 约 1.6 GB（内置 Node + CloudCLI + Git），克隆后需按 README 补齐，不入库
 runtime/
 tools/node_modules/
+**/__pycache__/
+*.py[cod]
 
 # ---------- 运行时产生的用户数据与状态 ----------
 # data/ 含浏览器 profile、会话、记忆、日志等本机状态，不入库
@@ -27,3 +29,7 @@ config/local-token.txt
 Thumbs.db
 .DS_Store
 desktop.ini
+
+# ---------- 工作区里的临时脚本（Claude 的工作目录，不入库）----------
+workspace/*.ps1
+workspace/*.tmp

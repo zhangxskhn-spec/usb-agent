@@ -26,10 +26,12 @@
 | 目录 / 文件 | 入库 | 说明 |
 |---|---|---|
 | `START.bat` | ✅ | 启动器（菜单 + 拉起网关 + 拉起网页/终端） |
-| `README.md` `CLEANUP-REPORT.md` | ✅ | 说明与清理记录 |
+| `README.md` | ✅ | 使用说明与故障排查 |
+| `docs/README.md` | ✅ | 文档与截图索引 |
+| `docs/archive/` | ✅ | 已完成的一次性材料（清理报告等） |
 | `config/keys.env.example` | ✅ | 密钥模板。真实 `keys.env` 含 API Key，已 `.gitignore` |
 | `patches/` | ✅ | 前端注入器 `*.js`、服务端补丁、`patches.json` 总账 |
-| `tools/` | ✅ | 模型网关 `anthropic-gw.mjs`、自检、构建与修复脚本 |
+| `tools/` | ✅ | 模型网关、自检、构建与修复脚本；`tools/archive/` 放已完成的一次性脚本 |
 | `docs/screenshots/` | ✅ | 界面预览截图（README 顶部引用） |
 | `workspace/` | ✅ | Claude 的默认工作目录 |
 | `app/webui/` | ✅（仅占位） | 网页壳运行目录，用 `.gitkeep` 保留空目录 |
@@ -73,21 +75,20 @@
 | [1] 网页界面 | 浏览器图形界面；模型在页面右下角下拉随意切换 MiMo / DeepSeek，无需重开 |
 | [2] 终端版 | 命令行界面（Claude Code 原生 TUI），默认 DeepSeek Flash |
 | [3] 环境自检 | 一键检查运行时/密钥是否正常 |
-| [4] 释放 U 盘 | 四层扫描 + 卷锁判定，结束占用进程并**真正弹出**（`tools\usb-eject.bat`） |
-| [0] 退出 | 只停网关并退出菜单（浏览器窗口需自己关） |
+| [0] 退出 | 结束本会话所有进程（网关、网页服务、监督者、浏览器）并退出。**不弹盘** —— 弹不弹、什么时候弹，你自己决定 |
 
 ## 终端版（菜单 `[2]`）怎么用
 
 进去就是**官方 Claude Code 的界面**，回车键下方常驻一行中文提示：
 
 ```
-小张claude  ·  当前模型 MiMo V2.6 Flash   |   换模型 /model   ·   换模式 Shift+Tab   ·   退出 /exit
+小张claude  ·  当前模型 MiMo V2.6 Flash   |   换模型 /model   ·   换权限 Shift+Tab   ·   退出 /exit
 ```
 
 | 想干什么 | 怎么做 |
 |---|---|
 | 换模型（4 个可选） | 输入 `/model` 回车，方向键选、回车确认 |
-| 换权限模式 | 按 `Shift + Tab` 循环（`auto` 自动放行 / `manual` 每次问） |
+| 换权限模式 | 按 `Shift + Tab` 循环：自动 → 计划 → 全部允许 → 手动 |
 | 看全部命令 | 输入 `/help` 回车 |
 | 退出回启动器菜单 | 输入 `/exit` 回车 |
 
@@ -95,12 +96,20 @@
 
 | 底部英文 | 中文 | 含义 |
 |---|---|---|
-| `manual mode on` | 手动模式 | 改文件、跑命令前都先问你（默认） |
-| `auto mode on` | 自动模式 | 常规操作自动放行，不再逐条确认 |
-| `accept edits on` | 接受编辑 | 文件修改直接落盘，跳过逐次确认 |
-| `plan mode on` | 计划模式 | 只出方案、先不动文件，你点头才开工 |
+| `manual mode on` | 手动模式 | 改文件、跑命令前都先问你 |
+| `accept edits on` | 自动模式 | 文件修改直接落盘，命令仍会确认 |
+| `bypass permissions on` | 全部允许 | 文件和命令都直接执行 |
 
-**启动默认就是 `accept edits`（接受编辑）**——改文件不再逐条问你，一进去就能直接干活；想更谨慎就按 `Shift + Tab` 切回 `manual`。官方还有个 `auto mode`（自动判断安不安全），但它依赖官方的模型分类器，这套网关模型拿不到——Claude Code 会直接提示 `auto mode unavailable for this model`（把模型名换成官方的也一样），所以默认给了最接近的 `accept edits`。
+**启动默认就是 `accept edits`（自动模式）**——改文件不再逐条问你，命令仍会确认。
+
+按 `Shift + Tab` 循环会经过 **4 档**：`accept edits`（自动）→ `plan`（计划）→ `bypass permissions`（全部允许）→ `manual`（手动）。
+其中 `plan` 与 `auto` 是 Claude Code 编进程序里的，配置层没有开关能裁掉（`permissions` 只提供
+`disableBypassPermissionsMode` / `disableAutoMode`，**没有 disablePlanMode**），按到 `auto` 还会跳回
+`manual` 并闪一行黄字 `auto mode unavailable for this model`（本包模型没有官方分类器）。
+
+> 如果你就是不想要 `plan`：`patches/README.md` 里记了「解绑 Shift+Tab」的做法
+> （`keybindings.json` 把 `Chat.bindings["shift+tab"]` 设为 `null`），代价是**会话内不能再切档**，
+> 只能在启动时用 `--permission-mode` 定死。两种方案二选一，不要两边都改。
 
 `/model` 里就这 5 行（`Default` + 4 个模型，与网页端下拉完全一致）：
 
@@ -128,7 +137,8 @@
 | 本地模型网关 | `START.bat`（后台静默运行，不弹窗） |
 | 网页壳（Node 服务） | `START.bat` |
 | Claude Code | 终端模式 / 网页里发消息时 |
-| 本会话浏览器 | `tools\open-browser.mjs` 启动的 Edge/Chrome。它的配置目录**默认在本机**（`%LOCALAPPDATA%\usb-agent-browser-profile`），U 盘上不放浏览器数据；但 Edge 的 crashpad、后台常驻进程（`--no-startup-window`）关窗口也不退，仍可能占盘，所以 `[0]`/`[4]` 会连它们一起关 |
+| 本会话浏览器 | `tools\open-browser.mjs` 启动的 Edge/Chrome。它的配置目录**默认在本机**（`%LOCALAPPDATA%\usb-agent-browser-profile`），U 盘上不放浏览器数据；但 Edge 的 crashpad、后台常驻进程（`--no-startup-window`）关窗口也不退，仍可能占盘，所以按 `[0]` 会把它们一起关 |
+| **资源管理器的预览窗格** | 不是本包拉起的，但**最容易漏**：你在资源管理器里停在包目录、右侧预览窗格正在显示 `START.bat` 时，explorer 会持有这个文件的读取句柄，卷就一直锁着 —— 表现就是「程序都关了、还是弹不出来」。按 `Alt+P` 关掉预览窗格，或直接关掉这个窗口 |
 
 **默认行为已经处理好了**：网关和浏览器都由一个「常驻监督者」拉起，而这个监督者与启动器
 **共享同一个控制台**（只共享控制台、不弹窗、不写输出），所以你**直接点右上角 × 关掉黑窗**时，
@@ -136,14 +146,16 @@
 （早期版本把网关做成脱离控制台的游离进程、浏览器用 `start` 拉起，才会出现「关窗也没用」。）
 常规退出走 `[0] 退出`，会显式结束网关、监督者和本会话浏览器（`stop-all`）。
 
-若还是弹不出来，双击 `tools\usb-eject.bat`（或菜单 `[4]`）。它做**四层扫描**并结束命中的进程：
+**先排除最常见的假占用**：资源管理器开着包目录 + 预览窗格（`Alt+P` 切换）会一直握着文件句柄，此时按 `[0]` 停完进程也弹不出来。关掉窗口或关掉预览窗格再试。
+
+若还是弹不出来，双击 `tools\usb-eject.bat`。它做**四层扫描**并结束命中的进程：
 
 1. 命令行 / 可执行文件路径指向该盘；
 2. **加载了该盘上 DLL/EXE 的进程**——这类占用者的命令行里根本看不到路径，却是
    “明明没开什么东西、盘就是弹不出来”的常见元凶（实测抓过一只把组件 DLL 装在 U 盘上的 Edge 子进程）；
 3. **工作目录停在该盘上的进程**（读进程 PEB）——实测证实：一个 cmd 窗口只要工作目录是 U 盘，
-   哪怕它什么都不干，卷也锁不住、弹不出来。所以启动器菜单 `[4]` 现在会先把自己窗口的工作目录
-   挪到 `C:\Windows` 再交接；
+   哪怕它什么都不干，卷也锁不住、弹不出来。所以 `usb-eject.bat` 会先把自己复制到 `%TEMP%`
+   再从主机盘跑，避免它自己成为占用者；
 4. 包内 `data\run\*.pid` 记录的网关／监督者／浏览器。
 
 然后它用**「安全删除硬件」内部那把锁做权威判定**：Windows 只会说“该设备正在使用中”，不会告诉你为什么；
@@ -169,55 +181,36 @@ tools\usb-eject.bat E: -Force          :: 锁定失败时强制 mountvol /p
 > 这个工具是**纯批处理 + PowerShell**，不依赖包内的 Node/runtime —— 就算 runtime 展开失败、
 > 网关起不来，它照样能用。它还会先把自己复制到 `%TEMP%` 再运行，因为**一个正在运行的 .bat 本身
 > 就持有它所在盘的句柄**，而 cmd 的工作目录也会留在那个盘上，这两条都会让卷永远锁不住（同样实测确认）。
-> 老版 `tools\eject-usb.bat` 现在只是转发壳；Node 版 `tools\release-usb.mjs`（两轮扫描）仍保留可用。
+> 老版 `tools\eject-usb.bat` 现在只是转发壳；Node 版 `tools\archive\release-usb.mjs`（两轮扫描）已归档，只在排查时用。
 
 > 注意：浏览器是我们单独启动的，和宿主机自己的浏览器是两个进程，
-> 关掉宿主机自己的浏览器没用，要让本工具或 `[4]` 把它关掉。
+> 关掉宿主机自己的浏览器没用，要让本工具把它关掉。
 
 
 ## 目录结构
 
 ```
 usb-agent\
-├─ START.bat            主入口（双击这个，唯一启动脚本）
-├─ runtime.zip          瘦身布局：runtime 只以这一个文件放 U 盘（首次启动展开到本机）
-├─ runtime.sha256       上面 zip 的内容指纹，决定本机缓存目录名（换机也能命中）
-├─ config\
-│   ├─ keys.env.example 密钥与模型设置模板（入库，值为空）
-│   └─ keys.env         填入真实密钥后由启动器读取（不入库，已 gitignore）
-├─ patches/            前端注入器源码 + 定制点总账（改界面改这里，勿改 bundle）
-├─ runtime\             就地布局：便携 Node.js + 便携 Git（与 runtime.zip 二选一）
-│   ├─ node\            （含全局安装的 Claude Code 与网页壳）
-│   └─ git\             （Claude Code 依赖的 Git Bash）
-├─ data\                所有数据，随身携带
-│   └─ home\            重定向后的用户目录（.claude 配置、会话、缓存）
-├─ app\
-│   └─ webui\           网页壳运行目录
-├─ tools\
-│   ├─ selfcheck.bat    环境自检
-│   ├─ stop-gw.bat      停止本启动器拉起的后台网关
-│   ├─ usb-eject.bat    安全弹出 U 盘：四层扫描 + FSCTL_LOCK_VOLUME 权威判定 + 真正弹出（双击即用）
-│   ├─ usb-eject.ps1    上面那个的实现（纯 PowerShell，不依赖包内 runtime）
-│   ├─ eject-usb.bat    旧名，现在只是转发到 usb-eject.bat
-│   ├─ runtime-home.bat 解析运行时可用的 runtime 目录；瘦身布局时首次展开到本机（START.bat 会调）
-│   ├─ deploy-to-usb.bat 一条命令部署到 U 盘（runtime 只留一个 zip + 多线程同步）
-│   ├─ zip-util.mjs     自写的 zip 打包器（系统 tar 打这个包会静默丢文件，见 patches/README.md）
-│   ├─ sync-to-usb.bat  快速同步：只更新程序文件与 data，不动 runtime
-│   ├─ forget-runtime-cache.bat 清除本机上的 runtime 展开缓存
-│   ├─ open-browser.mjs 等网页起来后用 U 盘独立 profile 打开界面（--dry-run 只探测）
-│   ├─ pack-for-usb.bat 整包打成单个 zip（备选搬运方式）
-│   ├─ unpack-on-usb.bat 在 U 盘上解开整包 zip
-│   ├─ anthropic-gw.mjs 本地模型网关（MiMo/DeepSeek 自动路由，默认从 4567 起选空闲端口）
-│   ├─ portable-runtime.mjs 端口探测 / 网关启停
-│   ├─ release-usb.mjs  释放 U 盘的 Node 版实现（命令行 + 已加载模块两轮匹配）
-│   └─ build-frontend.py 前端界面补丁构建器（仅在开发副本上跑）
-│   （同目录下另有若干 .bat / .mjs 辅助脚本，均为可选工具）
+├─ START.bat            唯一入口（双击它）
+├─ runtime.zip          瘦身布局：运行时只以这一个文件随盘走（首次启动展开到本机缓存）
+├─ runtime.sha256       上面 zip 的指纹，决定本机缓存目录名
+├─ runtime\             就地布局（与 runtime.zip 二选一，不要同时存在）
+├─ config\              密钥与模型设置（keys.env 含 Key，不入库）
+├─ data\                全部运行数据：会话、配置、缓存（不入库，随身携带）
+├─ app\webui\           网页壳运行目录（仅占位）
+├─ patches\             前端注入器 + 服务端补丁 + 定制点总账
+├─ tools\               网关、自检、部署、修复脚本 —— 清单见 tools/README.md
+├─ docs\                截图与历史存档 —— 索引见 docs/README.md
 └─ workspace\           Claude 的默认工作目录
 ```
 
-> U 盘上用的是**瘦身布局**（只有 `runtime.zip`），开发副本上是**就地布局**（有 `runtime\`）。
-> `runtime-home.bat` 两种都认；改前端/打补丁请在开发副本做，U 盘那份是部署产物。
+**只有三个地方该改**，改完各自跑一条命令，别直接动生成物：
 
+| 想改什么 | 改哪里 | 改完跑 |
+|---|---|---|
+| 网页界面 / 文案 | `patches/frontend/*.js` | `python tools\build-frontend.py` |
+| 网页壳服务端行为 | `dist-server` 里的文件 | `python tools\make-server-patches.py`（再 `apply-server-patches.py`） |
+| 启动流程 / 菜单 | `START.bat` | 无（保持 ASCII + CRLF） |
 
 ## 换模型 / 换密钥
 
@@ -293,7 +286,7 @@ tools\sync-to-usb.bat E          :: 只同步程序文件与 data，不动 runti
 - **想让 U 盘继续用老布局**（runtime 目录直接放盘上）：`tools\deploy-to-usb.bat E --inline`，
   或者干脆手工拷贝。FAT32 下不建议。
 - **先瘦身再拷**：`runtime\node\node.exe tools\prune-portable-cache.mjs --apply --trim-runtime`
-  清掉可重建的缓存与 source map（不动会话、登录态、workspace）。详见 `CLEANUP-REPORT.md`。
+  清掉可重建的缓存与 source map（不动会话、登录态、workspace）。详见 `docs/CLEANUP-REPORT.md`。
 
 
 ## 注意事项
@@ -302,7 +295,7 @@ tools\sync-to-usb.bat E          :: 只同步程序文件与 data，不动 runti
 - **不需要管理员权限**，不写注册表，不装驱动。
 - 数据都在 U 盘 `data\` 里；网页优先使用 U 盘 `data\browser-profile` 的独立 Edge/Chrome 配置，避免把登录令牌写入宿主浏览器；找不到 Edge/Chrome 时才回退系统默认浏览器。
 - 杀毒软件 / SmartScreen 首次可能拦截，选择「仍要运行」即可。
-- 拔盘前：先回到启动器选择 `[0] 退出`（或 `[4] 释放 U 盘`），确认网页和终端已关闭、浏览器窗口已关，再安全弹出；不要在请求进行中强拔。
+- 拔盘前：先回到启动器按 `[0]` 退出，确认网页和终端已关闭、浏览器窗口已关，再安全弹出；不要在请求进行中强拔。
   直接点 × 关掉黑窗也没问题——网关与启动器共享控制台，会随之结束；万一还有残留，`tools\eject-usb.bat` 一键清干净。
 
 ## 网页壳说明（CloudCLI）
@@ -360,7 +353,7 @@ tools\sync-to-usb.bat E          :: 只同步程序文件与 data，不动 runti
   `tools\deploy-to-usb.bat E` 重新部署，或把 `runtime\` 目录直接放到包里（老布局）。
 - **U 盘拷得特别慢**：先看 U 盘文件系统是不是 FAT32——是的话按上文「拷到 U 盘」第一步转成 NTFS，
   再用 `tools\deploy-to-usb.bat E` 部署（runtime 只留一个 zip）。
-- **弹出 U 盘提示「该设备正在使用中」**：双击 `tools\usb-eject.bat`（或启动器菜单 `[4]`）。它做**四层扫描**
+- **弹出 U 盘提示「该设备正在使用中」**：双击 `tools\usb-eject.bat`。它做**四层扫描**
   （命令行／已加载该盘 DLL-EXE／**工作目录停在该盘的进程**／包内 pid 文件），最后用 `FSCTL_LOCK_VOLUME`
   给出权威判定——锁得上就一定弹得出，锁不上会打印确切 Win32 错误码。只想看是谁在占用就加 `-Check`；实在顽固加 `-Force`。
   常见原因见上文「用完怎么安全弹出」。
